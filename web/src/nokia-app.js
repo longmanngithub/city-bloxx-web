@@ -45,6 +45,13 @@ class KeySoundPlayer {
       osc.connect(gain);
       gain.connect(this.ctx.destination);
 
+      osc.onended = () => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch (_) {}
+      };
+
       osc.start(t);
       osc.stop(t + 0.016);
     } catch (_) {}
@@ -138,16 +145,49 @@ let isGameRunning = false;
 let globalLib = null;
 let globalFreeJ2ME = null;
 
-// Clock in Nokia Status Bar
+// Power-optimized Clock in Nokia Status Bar
 function updateNokiaClock() {
   const now = new Date();
   const hours = String(now.getHours()).padStart(2, '0');
   const minutes = String(now.getMinutes()).padStart(2, '0');
   const clockEl = document.getElementById('status-time');
-  if (clockEl) clockEl.textContent = `${hours}:${minutes}`;
+  if (clockEl) {
+    const formatted = `${hours}:${minutes}`;
+    if (clockEl.textContent !== formatted) {
+      clockEl.textContent = formatted;
+    }
+  }
 }
-setInterval(updateNokiaClock, 1000);
-updateNokiaClock();
+
+let clockTimer = null;
+function scheduleClockUpdate() {
+  updateNokiaClock();
+  if (clockTimer) clearTimeout(clockTimer);
+  const now = new Date();
+  const msToNextMinute = (60 - now.getSeconds()) * 1000 - now.getMilliseconds() + 20;
+  clockTimer = setTimeout(scheduleClockUpdate, Math.max(1000, msToNextMinute));
+}
+scheduleClockUpdate();
+
+// Suspend audio processing and timers when tab is hidden / device is locked
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (window.libmidi && window.libmidi.context && window.libmidi.context.state === 'running') {
+      window.libmidi.context.suspend().catch(() => {});
+    }
+    if (keySound && keySound.ctx && keySound.ctx.state === 'running') {
+      keySound.ctx.suspend().catch(() => {});
+    }
+  } else {
+    if (window.libmidi && window.libmidi.context && window.libmidi.context.state === 'suspended') {
+      window.libmidi.context.resume().catch(() => {});
+    }
+    if (keySound && keySound.ctx && keySound.ctx.state === 'suspended') {
+      keySound.ctx.resume().catch(() => {});
+    }
+    scheduleClockUpdate();
+  }
+});
 
 // Wire all virtual buttons on Nokia 5310 XpressMusic
 function setupKeypadEvents() {
@@ -333,7 +373,10 @@ async function initCheerpJ() {
   }
 
   display = document.getElementById('display');
-  screenCtx = display.getContext('2d');
+  screenCtx = display.getContext('2d', {
+    alpha: false,
+    desynchronized: true
+  }) || display.getContext('2d');
   screenCtx.imageSmoothingEnabled = false;
   screenCtx.webkitImageSmoothingEnabled = false;
   screenCtx.mozImageSmoothingEnabled = false;
@@ -450,18 +493,28 @@ async function launchGame(jarBuffer, jadBuffer, appName = "citybloxx") {
   await launcherUtil.ensureAppId(loader, appName);
   const appId = await loader.getAppId();
 
-  // Explicit configuration for City Bloxx on Nokia 240x320
+  // Authentic Nokia 5310 XpressMusic hardware ran at 25-30 FPS.
+  // Uncapped fps ("0") causes FreeJ2ME to spin in a 100% CPU unthrottled loop, causing extreme heat and draining battery on phones.
+  // On mobile devices, 30 FPS provides the authentic Nokia Series 40 experience, cool thermals, and minimal battery consumption.
+  // On desktop, 60 FPS provides high-refresh smoothness with a 16ms sleep cycle.
+  // Can be manually overridden via ?fps=30 or ?fps=60 in URL.
+  const urlParams = new URLSearchParams(window.location.search);
+  const fpsParam = urlParams.get('fps');
+  const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                   (navigator.maxTouchPoints && navigator.maxTouchPoints > 1);
+  const targetFps = fpsParam ? String(parseInt(fpsParam, 10) || (isMobile ? 30 : 60)) : (isMobile ? "30" : "60");
+
   const nokiaSettings = {
     width: "240",
     height: "320",
     phone: "Nokia",
     sound: "on",
     rotate: "off",
-    fps: "0",
+    fps: targetFps,
     fontSize: "0",
     dgFormat: "4444",
     forceFullscreen: "off",
-    queuedPaint: "off",
+    queuedPaint: "on",
     textureDisableFilter: "off"
   };
 

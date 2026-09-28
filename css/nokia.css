@@ -113,6 +113,9 @@ body {
   background: #000000;
   overflow: hidden;
   z-index: 1;
+  contain: strict;
+  transform: translateZ(0);
+  will-change: contents;
 }
 
 /* Razor-sharp pixel display context */
@@ -127,6 +130,8 @@ body {
   image-rendering: crisp-edges;
   pointer-events: none;
   background: #000000;
+  transform: translateZ(0);
+  will-change: contents;
 }
 
 /* Standby & Loading Overlay */
@@ -351,6 +356,8 @@ body {
   transition: transform 0.12s ease-out, filter 0.15s ease-out;
   transform-origin: center;
   transform-box: fill-box;
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 /* Interactive hover feedback */
