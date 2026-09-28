@@ -42,9 +42,6 @@
         lastEnd = now;
       }, { passive: false });
       document.addEventListener('dblclick', function(e) { e.preventDefault(); }, { passive: false });
-      if (window.location.pathname.includes('/web/') || window.location.pathname.endsWith('/web')) {
-        window.location.replace('../' + window.location.search);
-      }
     })();
   </script>
 </head>

@@ -274,11 +274,13 @@ const server = http.createServer((req, res) => {
     return serveFile(req, res, targetFile);
   }
 
-  // Default: serve from web/ directory
+  // Default: serve static files (root directory first, fallback to web/)
   let relativePath = pathname === '/' ? 'index.html' : pathname;
-  // If requested without extension and exists in web, try to serve
   const safePath = path.normalize(relativePath).replace(/^(\.\.[\/\\])+/, '');
-  let targetFile = path.join(WEB_DIR, safePath);
+  let targetFile = path.join(__dirname, safePath);
+  if (!fs.existsSync(targetFile)) {
+    targetFile = path.join(WEB_DIR, safePath);
+  }
 
   // If path is a directory, check for index.html inside
   if (fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()) {
@@ -315,7 +317,7 @@ server.listen(PORT, () => {
   if (networkIp) {
     console.log(`Network:     http://${networkIp}:${PORT}/`);
   }
-  console.log(`Static Root: ./web`);
+  console.log(`Static Root: ./`);
   console.log(`Game Store:  ./game`);
   if (game.found) {
     const sizeKb = (game.size / 1024).toFixed(1);
