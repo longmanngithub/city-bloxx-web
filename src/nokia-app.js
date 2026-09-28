@@ -70,8 +70,10 @@ class KeypadController {
     const code = codeMap[keyStr];
     if (!code) return;
 
-    // Prevent duplicate down if already active
-    if (this.activeKeys.has(keyStr)) return;
+    // Cleanly release any prior state before pressing again
+    if (this.activeKeys.has(keyStr)) {
+      this.release(keyStr);
+    }
 
     this.sound.init();
     this.sound.playClick();
@@ -141,9 +143,22 @@ const cheerpjWebRoot = '/app' + location.pathname.replace(/\/[^/]*$/, '');
 
 let display = null;
 let screenCtx = null;
+let offscreenCanvas = null;
+let offscreenCtx = null;
+let renderLoopStarted = false;
 let isGameRunning = false;
 let globalLib = null;
 let globalFreeJ2ME = null;
+
+function startRenderLoop() {
+  function renderFrame() {
+    if (offscreenCanvas && screenCtx && display && display.style.display !== 'none') {
+      screenCtx.drawImage(offscreenCanvas, 0, 0);
+    }
+    requestAnimationFrame(renderFrame);
+  }
+  requestAnimationFrame(renderFrame);
+}
 
 // Power-optimized Clock in Nokia Status Bar
 function updateNokiaClock() {
@@ -202,9 +217,6 @@ function setupKeypadEvents() {
 
     const onPointerDown = (e) => {
       e.preventDefault();
-      if (e.target.setPointerCapture) {
-        try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
-      }
       if (releaseTimer) {
         clearTimeout(releaseTimer);
         releaseTimer = null;
@@ -216,9 +228,6 @@ function setupKeypadEvents() {
 
     const onPointerUp = (e) => {
       e.preventDefault();
-      if (e.target.releasePointerCapture) {
-        try { e.target.releasePointerCapture(e.pointerId); } catch (_) {}
-      }
       if (!btn.classList.contains('active')) return;
 
       // Dispatched immediately to FreeJ2ME so repeated taps (e.g. key 5 to drop blocks) are instantaneous
@@ -256,18 +265,12 @@ function setupKeypadEvents() {
     let releaseTimer = null;
 
     btn.addEventListener('pointerdown', (e) => {
-      if (e.target.setPointerCapture) {
-        try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
-      }
       if (releaseTimer) clearTimeout(releaseTimer);
       pressStartTime = performance.now();
       btn.classList.add('active');
     });
 
     const onRelease = (e) => {
-      if (e.target.releasePointerCapture) {
-        try { e.target.releasePointerCapture(e.pointerId); } catch (_) {}
-      }
       if (!btn.classList.contains('active')) return;
       const elapsed = performance.now() - pressStartTime;
       const remaining = Math.max(0, 70 - elapsed);
@@ -352,6 +355,8 @@ function setupKeypadEvents() {
 
     e.preventDefault();
   });
+
+  window.addEventListener('blur', () => keypad.releaseAll());
 }
 
 // Convert JS Object to Java HashMap
@@ -381,6 +386,17 @@ async function initCheerpJ() {
   screenCtx.webkitImageSmoothingEnabled = false;
   screenCtx.mozImageSmoothingEnabled = false;
 
+  offscreenCanvas = document.createElement('canvas');
+  offscreenCanvas.width = 240;
+  offscreenCanvas.height = 320;
+  offscreenCtx = offscreenCanvas.getContext('2d', {
+    alpha: false,
+    desynchronized: true
+  }) || offscreenCanvas.getContext('2d');
+  offscreenCtx.imageSmoothingEnabled = false;
+  offscreenCtx.webkitImageSmoothingEnabled = false;
+  offscreenCtx.mozImageSmoothingEnabled = false;
+
   window.libmidi = new LibMidi(createUnlockingAudioContext());
   await window.libmidi.init();
   window.libmidi.midiPlayer.addEventListener('end-of-media', e => {
@@ -405,11 +421,20 @@ async function initCheerpJ() {
       },
       async Java_pl_zb3_freej2me_bridge_shell_Shell_setIcon(lib, iconBytes) {},
       async Java_pl_zb3_freej2me_bridge_shell_Shell_getScreenCtx(lib) {
-        return screenCtx;
+        return offscreenCtx;
       },
       async Java_pl_zb3_freej2me_bridge_shell_Shell_setCanvasSize(lib, width, height) {
-        screenCtx.canvas.width = 240;
-        screenCtx.canvas.height = 320;
+        const w = width || 240;
+        const h = height || 320;
+
+        offscreenCanvas.width = w;
+        offscreenCanvas.height = h;
+        offscreenCtx.imageSmoothingEnabled = false;
+        offscreenCtx.webkitImageSmoothingEnabled = false;
+        offscreenCtx.mozImageSmoothingEnabled = false;
+
+        screenCtx.canvas.width = w;
+        screenCtx.canvas.height = h;
         screenCtx.imageSmoothingEnabled = false;
         screenCtx.webkitImageSmoothingEnabled = false;
         screenCtx.mozImageSmoothingEnabled = false;
@@ -420,6 +445,11 @@ async function initCheerpJ() {
         const overlay = document.getElementById('lcd-standby');
         if (overlay) overlay.style.display = 'none';
         display.style.display = 'block';
+
+        if (!renderLoopStarted) {
+          renderLoopStarted = true;
+          startRenderLoop();
+        }
       },
       async Java_pl_zb3_freej2me_bridge_shell_Shell_waitForAndDispatchEvents(lib, listener) {
         const KeyEvent = await lib.pl.zb3.freej2me.bridge.shell.KeyEvent;
@@ -493,28 +523,24 @@ async function launchGame(jarBuffer, jadBuffer, appName = "citybloxx") {
   await launcherUtil.ensureAppId(loader, appName);
   const appId = await loader.getAppId();
 
-  // Authentic Nokia 5310 XpressMusic hardware ran at 25-30 FPS.
-  // Uncapped fps ("0") causes FreeJ2ME to spin in a 100% CPU unthrottled loop, causing extreme heat and draining battery on phones.
-  // On mobile devices, 30 FPS provides the authentic Nokia Series 40 experience, cool thermals, and minimal battery consumption.
-  // On desktop, 60 FPS provides high-refresh smoothness with a 16ms sleep cycle.
-  // Can be manually overridden via ?fps=30 or ?fps=60 in URL.
-  const urlParams = new URLSearchParams(window.location.search);
-  const fpsParam = urlParams.get('fps');
-  const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-                   (navigator.maxTouchPoints && navigator.maxTouchPoints > 1);
-  const targetFps = fpsParam ? String(parseInt(fpsParam, 10) || (isMobile ? 30 : 60)) : (isMobile ? "30" : "60");
-
+  // Nokia Series 40 configuration.
+  // Note on performance & concurrency:
+  // fps must remain "0" and queuedPaint "off" at the Java level. In CheerpJ WebAssembly,
+  // FreeJ2ME's Java painter executes Thread.sleep() inside painter.run() while holding LCDUILock.
+  // Sleeping inside Java deadlocks LCDUILock and blocks incoming key events.
+  // Battery efficiency, thermal protection, and 60 FPS VSync presentation are handled
+  // cleanly by our decoupled browser requestAnimationFrame blit loop.
   const nokiaSettings = {
     width: "240",
     height: "320",
     phone: "Nokia",
     sound: "on",
     rotate: "off",
-    fps: targetFps,
+    fps: "0",
     fontSize: "0",
     dgFormat: "4444",
     forceFullscreen: "off",
-    queuedPaint: "on",
+    queuedPaint: "off",
     textureDisableFilter: "off"
   };
 

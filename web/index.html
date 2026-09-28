@@ -17,29 +17,13 @@
   <link href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/nokia.css">
   <script>
-    // Zero-latency mobile gesture & double-tap zoom lock (iOS Safari & Chrome)
+    // Zero-latency mobile gesture & zoom lock (iOS Safari & Chrome)
     (function() {
       ['gesturestart', 'gesturechange', 'gestureend'].forEach(function(ev) {
         document.addEventListener(ev, function(e) { e.preventDefault(); }, { passive: false });
       });
       document.addEventListener('touchstart', function(e) {
         if (e.touches && e.touches.length > 1) e.preventDefault();
-      }, { passive: false });
-      var lastTouch = 0;
-      document.addEventListener('touchstart', function(e) {
-        var now = Date.now();
-        if (now - lastTouch <= 350) {
-          if (!e.target.closest || (!e.target.closest('.phone-btn') && !e.target.closest('.music-btn'))) {
-            e.preventDefault();
-          }
-        }
-        lastTouch = now;
-      }, { passive: false });
-      var lastEnd = 0;
-      document.addEventListener('touchend', function(e) {
-        var now = Date.now();
-        if (now - lastEnd <= 350) e.preventDefault();
-        lastEnd = now;
       }, { passive: false });
       document.addEventListener('dblclick', function(e) { e.preventDefault(); }, { passive: false });
       if (window.location.pathname.includes('/web/') || window.location.pathname.endsWith('/web')) {
