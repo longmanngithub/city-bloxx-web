@@ -1,0 +1,18 @@
+Manifest-Version: 1.0
+MIDlet-Name: City Bloxx
+Created-By: 1.4.2_02 (Sun Microsystems Inc.)
+DChoc-Rain-Probability: 20
+DChoc-Snow-Probability: 30
+MIDlet-1: City Bloxx, /icon.png, House
+Nokia-MIDlet-Category: Game
+Nokia-Platform: Nokia*
+DChoc-Rain-Duration: 60
+MicroEdition-Configuration: CLDC-1.0
+MIDlet-Vendor: Nokia
+DChoc-Snow-Duration: 50
+UI_version: S60_3.1
+MIDlet-Version: 1.0.8
+MicroEdition-Profile: MIDP-2.0
+MIDlet-Jar-Size: 
+MIDlet-Jar-URL: City Bloxx-51946.jar
+Nokia-MIDlet-Category: Game

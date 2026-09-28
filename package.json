@@ -1,0 +1,18 @@
+{
+  "name": "city-bloxx-web",
+  "version": "1.0.0",
+  "description": "City Bloxx web playable on virtual Nokia phone with 240x320 resolution",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "city-bloxx",
+    "j2me",
+    "nokia",
+    "cheerpj",
+    "freej2me"
+  ],
+  "author": "",
+  "license": "MIT"
+}
