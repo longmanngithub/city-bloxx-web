@@ -145,6 +145,7 @@ let display = null;
 let screenCtx = null;
 let offscreenCanvas = null;
 let offscreenCtx = null;
+let frameDirty = false;
 let renderLoopStarted = false;
 let isGameRunning = false;
 let globalLib = null;
@@ -152,8 +153,9 @@ let globalFreeJ2ME = null;
 
 function startRenderLoop() {
   function renderFrame() {
-    if (offscreenCanvas && screenCtx && display && display.style.display !== 'none') {
+    if (frameDirty && offscreenCanvas && screenCtx && display && display.style.display !== 'none' && document.visibilityState !== 'hidden') {
       screenCtx.drawImage(offscreenCanvas, 0, 0);
+      frameDirty = false;
     }
     requestAnimationFrame(renderFrame);
   }
@@ -397,12 +399,24 @@ async function initCheerpJ() {
   offscreenCtx.webkitImageSmoothingEnabled = false;
   offscreenCtx.mozImageSmoothingEnabled = false;
 
-  window.libmidi = new LibMidi(createUnlockingAudioContext());
-  await window.libmidi.init();
-  window.libmidi.midiPlayer.addEventListener('end-of-media', e => {
-    window.evtQueue.queueEvent({ kind: 'player-eom', player: e.target });
-  });
-  window.libmedia = new LibMedia();
+  try {
+    const audioCtx = createUnlockingAudioContext();
+    window.libmidi = new LibMidi(audioCtx);
+    await window.libmidi.init();
+    if (window.libmidi.midiPlayer) {
+      window.libmidi.midiPlayer.addEventListener('end-of-media', e => {
+        window.evtQueue?.queueEvent({ kind: 'player-eom', player: e.target });
+      });
+    }
+  } catch (audioErr) {
+    console.warn("MIDI audio initialization skipped/failed:", audioErr);
+  }
+
+  try {
+    window.libmedia = new LibMedia();
+  } catch (mediaErr) {
+    console.warn("LibMedia initialization skipped/failed:", mediaErr);
+  }
 
   await cheerpjInit({
     enableDebug: false,
@@ -449,6 +463,26 @@ async function initCheerpJ() {
         if (!renderLoopStarted) {
           renderLoopStarted = true;
           startRenderLoop();
+        }
+      },
+      async Java_pl_zb3_freej2me_bridge_graphics_CanvasGraphics_drawImage2(lib, ctx, source, sx, sy, dx, dy, width, height, flipY, withAlpha) {
+        if (!withAlpha && ctx !== offscreenCtx) {
+          const prevFill = ctx.fillStyle;
+          ctx.fillStyle = 'black';
+          ctx.fillRect(dx, dy, width, height);
+          ctx.fillStyle = prevFill;
+        }
+        if (!flipY) {
+          ctx.drawImage(source, sx, sy, width, height, dx, dy, width, height);
+        } else {
+          ctx.save();
+          ctx.translate(dx, dy + height);
+          ctx.scale(1, -1);
+          ctx.drawImage(source, sx, sy, width, height, 0, 0, width, height);
+          ctx.restore();
+        }
+        if (ctx === offscreenCtx) {
+          frameDirty = true;
         }
       },
       async Java_pl_zb3_freej2me_bridge_shell_Shell_waitForAndDispatchEvents(lib, listener) {
@@ -523,20 +557,24 @@ async function launchGame(jarBuffer, jadBuffer, appName = "citybloxx") {
   await launcherUtil.ensureAppId(loader, appName);
   const appId = await loader.getAppId();
 
-  // Nokia Series 40 configuration.
-  // Note on performance & concurrency:
-  // fps must remain "0" and queuedPaint "off" at the Java level. In CheerpJ WebAssembly,
-  // FreeJ2ME's Java painter executes Thread.sleep() inside painter.run() while holding LCDUILock.
-  // Sleeping inside Java deadlocks LCDUILock and blocks incoming key events.
-  // Battery efficiency, thermal protection, and 60 FPS VSync presentation are handled
-  // cleanly by our decoupled browser requestAnimationFrame blit loop.
+  // Performance & Thermal Configuration:
+  // - On mobile devices: 30 FPS matches authentic Nokia 5310 Series 40 hardware pacing,
+  //   prevents thermal throttling, and minimizes battery draw by giving the CPU core 33ms sleep intervals.
+  // - On desktop: 60 FPS provides high-refresh smoothness.
+  // - Supports manual URL query override: ?fps=30 or ?fps=60.
+  const urlParams = new URLSearchParams(window.location.search);
+  const fpsParam = urlParams.get('fps');
+  const isMobile = /Android|iPhone|iPad|iPod|webOS|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                   (navigator.maxTouchPoints && navigator.maxTouchPoints > 1);
+  const targetFps = fpsParam ? String(parseInt(fpsParam, 10) || (isMobile ? 30 : 60)) : (isMobile ? "30" : "60");
+
   const nokiaSettings = {
     width: "240",
     height: "320",
     phone: "Nokia",
     sound: "on",
     rotate: "off",
-    fps: "0",
+    fps: targetFps,
     fontSize: "0",
     dgFormat: "4444",
     forceFullscreen: "off",
@@ -717,8 +755,8 @@ async function handleUserFiles(fileList) {
   await launchGame(jarBuffer, jadBuffer, jarFile.name);
 }
 
-// DOM Ready
-document.addEventListener('DOMContentLoaded', () => {
+// DOM Ready / App Initialization
+function initApp() {
   setupKeypadEvents();
 
   // Hidden file input on LCD
@@ -759,7 +797,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Disable browser zoom and accidental pinch/double-tap gestures on mobile
   preventBrowserZoom();
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
 
 // Comprehensive mobile zoom prevention (pinch zoom, double-tap zoom, gesture zoom)
 function preventBrowserZoom() {

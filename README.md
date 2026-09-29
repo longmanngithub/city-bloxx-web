@@ -66,21 +66,22 @@ flowchart TD
 
 ```
 city-bloxx/
+├── assets/
+│   └── nokia-5310-frame-new.png  # Photographic Nokia 5310 device frame
+├── css/
+│   └── nokia.css                 # 1:1 Nokia 5310 styling and layout
 ├── game/
 │   ├── City_Bloxx-51946.jar      # J2ME MIDlet archive
 │   └── City Bloxx-51946.jad      # Application descriptor (optional)
-├── web/
-│   ├── css/
-│   │   └── nokia.css             # 1:1 Nokia 5310 styling and layout
-│   ├── libjs/                    # Native canvas graphics and font shims
-│   ├── libmedia/                 # FFmpeg WebAssembly media decoders
-│   ├── libmidi/                  # FluidSynth WebAssembly MIDI synthesizer
-│   ├── src/
-│   │   ├── eventqueue.js         # J2ME bridge event queue
-│   │   ├── key.js                # Keycode mapping table
-│   │   └── nokia-app.js          # Device controller and runtime lifecycle
-│   ├── freej2me-web.jar          # Compiled FreeJ2ME bridge bytecode
-│   └── index.html                # Entry point rendering the virtual device
+├── libjs/                        # Native canvas graphics and font shims
+├── libmedia/                     # FFmpeg WebAssembly media decoders
+├── libmidi/                      # FluidSynth WebAssembly MIDI synthesizer
+├── src/
+│   ├── eventqueue.js             # J2ME bridge event queue
+│   ├── key.js                    # Keycode mapping table
+│   └── nokia-app.js              # Device controller and runtime lifecycle
+├── freej2me-web.jar              # Compiled FreeJ2ME bridge bytecode
+├── index.html                    # Entry point rendering the virtual device
 ├── server.js                     # Zero-dependency HTTP server with Range support
 ├── package.json
 └── LICENSE                       # MIT License
@@ -144,9 +145,9 @@ The virtual device provides complete control using on-screen buttons. A synchron
 
 ## Custom Favicon
 
-To use a custom favicon, place your icon file directly into the `web/` directory:
+To use a custom favicon, place your icon file directly into the project root directory:
 
-- File path: `web/favicon.png` or `web/favicon.ico`
+- File path: `favicon.png` or `favicon.ico`
 
 The HTML template and HTTP server automatically detect and serve this file.
 

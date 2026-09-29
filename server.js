@@ -4,7 +4,6 @@ const path = require('path');
 const os = require('os');
 
 const PORT = process.env.PORT || 8080;
-const WEB_DIR = path.join(__dirname, 'web');
 const GAME_DIR = path.join(__dirname, 'game');
 
 // Ensure game directory exists
@@ -38,19 +37,9 @@ const MIME_TYPES = {
 
 function getGameFiles() {
   try {
-    const searchDirs = [GAME_DIR, path.join(WEB_DIR, 'game')];
     let files = [];
-    let activeDir = GAME_DIR;
-
-    for (const dir of searchDirs) {
-      if (fs.existsSync(dir)) {
-        const list = fs.readdirSync(dir);
-        if (list.some(f => f.toLowerCase().endsWith('.jar'))) {
-          files = list;
-          activeDir = dir;
-          break;
-        }
-      }
+    if (fs.existsSync(GAME_DIR)) {
+      files = fs.readdirSync(GAME_DIR);
     }
 
     const jarFiles = files.filter(f => f.toLowerCase().endsWith('.jar'));
@@ -69,7 +58,7 @@ function getGameFiles() {
     let targetJad = jadFiles.find(f => f.toLowerCase().startsWith(baseName.toLowerCase())) ||
                     jadFiles[0] || null;
 
-    const jarStat = fs.statSync(path.join(activeDir, targetJar));
+    const jarStat = fs.statSync(path.join(GAME_DIR, targetJar));
 
     return {
       found: true,
@@ -263,24 +252,28 @@ const server = http.createServer((req, res) => {
     return handleUpload(req, res);
   }
 
-  // Serve from game/ directory (checks ./game and ./web/game)
-  if (pathname.startsWith('/game/')) {
-    const relativePath = pathname.substring(6);
-    const safePath = path.normalize(relativePath).replace(/^(\.\.[\/\\])+/, '');
-    let targetFile = path.join(GAME_DIR, safePath);
-    if (!fs.existsSync(targetFile)) {
-      targetFile = path.join(WEB_DIR, 'game', safePath);
-    }
+  // Handle legacy /web requests gracefully
+  if (pathname === '/web' || pathname === '/web/') {
+    res.writeHead(301, { Location: '/' });
+    return res.end();
+  }
+  let relativePath = pathname;
+  if (relativePath.startsWith('/web/')) {
+    relativePath = relativePath.substring(5);
+  }
+
+  // Serve from game/ directory
+  if (relativePath.startsWith('/game/')) {
+    const gameSubpath = relativePath.substring(6);
+    const safePath = path.normalize(gameSubpath).replace(/^(\.\.[\/\\])+/, '');
+    const targetFile = path.join(GAME_DIR, safePath);
     return serveFile(req, res, targetFile);
   }
 
-  // Default: serve static files (root directory first, fallback to web/)
-  let relativePath = pathname === '/' ? 'index.html' : pathname;
-  const safePath = path.normalize(relativePath).replace(/^(\.\.[\/\\])+/, '');
+  // Default: serve static files from root directory
+  let reqFile = relativePath === '/' ? 'index.html' : relativePath;
+  const safePath = path.normalize(reqFile).replace(/^(\.\.[\/\\])+/, '');
   let targetFile = path.join(__dirname, safePath);
-  if (!fs.existsSync(targetFile)) {
-    targetFile = path.join(WEB_DIR, safePath);
-  }
 
   // If path is a directory, check for index.html inside
   if (fs.existsSync(targetFile) && fs.statSync(targetFile).isDirectory()) {

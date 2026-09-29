@@ -1,80 +1,89 @@
 // helpers
 
 export function unlockAudioContext(audioCtx) {
-    if (audioCtx.state !== 'suspended') return;
+    if (!audioCtx || audioCtx.state !== 'suspended') return;
     const b = document.body;
+    if (!b) return;
     const events = ['touchstart','touchend', 'mousedown','keydown'];
     events.forEach(e => b.addEventListener(e, unlock, false));
-    function unlock() { audioCtx.resume().then(clean); }
-    function clean() { events.forEach(e => b.removeEventListener(e, unlock)); }
+    function unlock() {
+        audioCtx.resume().catch(() => {}).then(clean);
+    }
+    function clean() {
+        events.forEach(e => b.removeEventListener(e, unlock));
+    }
 }
 
 export function createUnlockingAudioContext(...params) {
-    const ac = new AudioContext(...params); // params?
-    unlockAudioContext(ac);
-    return ac;
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    try {
+        const ac = new AudioCtx(...params);
+        unlockAudioContext(ac);
+        return ac;
+    } catch (e) {
+        console.warn('AudioContext creation failed:', e);
+        return null;
+    }
 }
 
 export function closeContext(ctx) {
-    return ctx.close();
+    if (!ctx) return Promise.resolve();
+    try {
+        return ctx.close();
+    } catch (_) {
+        return Promise.resolve();
+    }
 }
 
 export class LibMidi {
     constructor(context, destination=null) {
-        this.context = context;
-        this.destination = destination || context.destination;
+        this.context = context || null;
+        this.destination = (context && (destination || context.destination)) || null;
         this.initialized = false;
-
         this._midiPlayer = null;
-
-        // we should have only one midiplayer initialized on demand, clients just use setsequence
-        // however, end-of-media events will be delivered to all listeners
-
     }
 
     async init() {
-        if (!this.context.audioWorklet) {
+        if (!this.context || !this.context.audioWorklet || typeof AudioWorkletNode === 'undefined') {
             this.initialized = true;
             return;
         }
 
-        const addModuleTask = this.context.audioWorklet.addModule(new URL('worklet.js', import.meta.url).toString());
+        try {
+            const addModuleTask = this.context.audioWorklet.addModule(new URL('worklet.js', import.meta.url).toString());
+            const module = await WebAssembly.compileStreaming(fetch(new URL('libmidi.wasm', import.meta.url)));
+            await addModuleTask;
 
-        const module = await WebAssembly.compileStreaming(fetch(new URL('libmidi.wasm', import.meta.url)));
-
-        await addModuleTask;
-
-        // since we can't directly message the module.. yet
-        const bootstrapNode = new AudioWorkletNode(this.context, "bootstrap", {
-            processorOptions: {
-                module
-            }
-        });
-
-        await new Promise((resolve, reject) => {
-            bootstrapNode.port.onmessage = e => {
-                if (e.data.ok) {
-                    resolve();
-                } else {
-                    reject(e.data.error);
+            const bootstrapNode = new AudioWorkletNode(this.context, "bootstrap", {
+                processorOptions: {
+                    module
                 }
-            };
-        });
+            });
+
+            await new Promise((resolve, reject) => {
+                bootstrapNode.port.onmessage = e => {
+                    if (e.data.ok) {
+                        resolve();
+                    } else {
+                        reject(e.data.error);
+                    }
+                };
+            });
+        } catch (err) {
+            console.warn('LibMidi init failed/restricted on this device:', err);
+        }
 
         this.initialized = true;
     }
 
-
     async close() {
         if (this._midiPlayer) {
-            this._midiPlayer.close();
+            try { this._midiPlayer.close(); } catch (_) {}
             this._midiPlayer = null;
         }
 
         this.initialized = false;
-
-        // no context close as context is not ours
-        // close players?
     }
 
     get midiPlayer() {
@@ -125,103 +134,129 @@ class CmdClient {
 
 
 export class MIDIPlayer extends EventTarget {
-    // this MUST be explicitly closed
-    // but only one instance is needed to emulate a MIDI device
-
     static _unregister = ([client, node, gainNode]) => {
-        client.send({cmd: "delete"});
-        node.disconnect();
-        gainNode.disconnect();
+        if (client) {
+            try { client.send({cmd: "delete"}); } catch (_) {}
+        }
+        if (node) {
+            try { node.disconnect(); } catch (_) {}
+        }
+        if (gainNode) {
+            try { gainNode.disconnect(); } catch (_) {}
+        }
     };
 
     static _finalizer = new FinalizationRegistry(args => {
-        console.warn('closing midiplayer via finalizer');
-
-        this._unregister(args);
+        try {
+            this._unregister(args);
+        } catch (_) {}
     });
-
 
     constructor(audioContext, destination) {
         super();
+        this.duration = 0;
+        this.gainNode = null;
+        this.node = null;
+        this.client = null;
 
-        if (!audioContext.audioWorklet || typeof AudioWorkletNode === 'undefined') {
+        if (!audioContext || !audioContext.audioWorklet || typeof AudioWorkletNode === 'undefined') {
             return;
         }
 
-        this.gainNode = audioContext.createGain();
-        this.gainNode.gain.value = 1;
-
-        this.gainNode.connect(destination);
-
-        this.node = new AudioWorkletNode(audioContext, 'midi-player', {
-            outputChannelCount: [2]
-        });
-        this.node.connect(this.gainNode);
-        this.client = new CmdClient(this.node.port);
-
-        const weakThis = new WeakRef(this); // it got crazy pretty fast..
-
-        this.node.port.onmessage = e => {
-            if (e.data?.replyFor) return; // these are for client.. should we use cancel?
-
-            if (e.data === 'end-of-media') {
-                weakThis.deref()?.dispatchEvent(new Event('end-of-media'));
+        try {
+            this.gainNode = audioContext.createGain();
+            this.gainNode.gain.value = 1;
+            if (destination) {
+                this.gainNode.connect(destination);
             }
-        };
 
-        this.duration = 0;
+            this.node = new AudioWorkletNode(audioContext, 'midi-player', {
+                outputChannelCount: [2]
+            });
+            this.node.connect(this.gainNode);
+            this.client = new CmdClient(this.node.port);
 
-        MIDIPlayer._finalizer.register(this, [this.client, this.node, this.gainNode], this);
+            const weakThis = new WeakRef(this);
+
+            this.node.port.onmessage = e => {
+                if (e.data?.replyFor) return;
+                if (e.data === 'end-of-media') {
+                    weakThis.deref()?.dispatchEvent(new Event('end-of-media'));
+                }
+            };
+
+            MIDIPlayer._finalizer.register(this, [this.client, this.node, this.gainNode], this);
+        } catch (err) {
+            console.warn('MIDIPlayer construction failed:', err);
+        }
     }
 
-    // this is just relays the promise
     send(what, transfer=[]) {
-        return this.client && this.client.send(what, transfer);
+        return this.client ? this.client.send(what, transfer) : Promise.resolve();
     }
 
     async setSequence(buffer) {
-        const { duration } = await this.send({cmd: "setSequence", buffer}); //hmm, no transfer.. we're not sure
-        console.log('duration', duration);
-        this.duration = duration;
-
+        if (!this.client) return;
+        try {
+            const res = await this.send({cmd: "setSequence", buffer});
+            const duration = res?.duration || 0;
+            this.duration = duration;
+        } catch (e) {
+            console.warn("setSequence error:", e);
+        }
     }
 
     play() {
-        this.send({cmd: "play"});
+        if (this.client) {
+            try { this.send({cmd: "play"}); } catch (_) {}
+        }
     }
 
     loop(times) {
-        this.send({cmd: "loop", times});
+        if (this.client) {
+            try { this.send({cmd: "loop", times}); } catch (_) {}
+        }
     }
 
     stop() {
-        this.send({cmd: "stop"});
+        if (this.client) {
+            try { this.send({cmd: "stop"}); } catch (_) {}
+        }
     }
 
     shortEvent(status, data1, data2) {
-        this.send({cmd: "shortEvent", status, data1, data2});
+        if (this.client) {
+            try { this.send({cmd: "shortEvent", status, data1, data2}); } catch (_) {}
+        }
     }
 
-    // async
     getPosition() {
-        return this.send({cmd: "getPosition"});
+        return this.client ? this.send({cmd: "getPosition"}) : Promise.resolve(0);
     }
 
     seek(pos) {
-        return this.send({cmd: "seek", pos});
+        return this.client ? this.send({cmd: "seek", pos}) : Promise.resolve();
     }
 
     close() {
-        MIDIPlayer._unregister([this.client, this.node, this.gainNode]);
-        MIDIPlayer._finalizer.unregister(this);
+        if (this.client || this.node || this.gainNode) {
+            MIDIPlayer._unregister([this.client, this.node, this.gainNode]);
+            try {
+                MIDIPlayer._finalizer.unregister(this);
+            } catch (_) {}
+            this.client = null;
+            this.node = null;
+            this.gainNode = null;
+        }
     }
 
     get volume() {
-        return this.gainNode.gain.value;
+        return this.gainNode?.gain?.value ?? 1;
     }
 
     set volume(v) {
-        this.gainNode.gain.value = v;
+        if (this.gainNode?.gain) {
+            this.gainNode.gain.value = v;
+        }
     }
-
 }
